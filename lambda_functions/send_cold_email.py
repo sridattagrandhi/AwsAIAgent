@@ -1,93 +1,110 @@
-import json
-import boto3
+# lambda_functions/send_cold_email.py
+import os, json, uuid, logging
 from botocore.exceptions import ClientError
-import logging
-import os
+
+try:
+    import boto3
+except Exception:
+    boto3 = None  # allows dry-run even if boto3 isn't present locally
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-# Initialize SES client
-ses_client = boto3.client('ses', region_name=os.environ.get('AWS_REGION', 'us-east-1'))
+def _resp(code=200, body=None):
+    return {
+        "statusCode": code,
+        "headers": {
+            "Content-Type": "application/json",
+            "Access-Control-Allow-Origin": "*"
+        },
+        "body": json.dumps(body if body is not None else {"ok": True})
+    }
+
+# cache client per cold start
+_SES = None
+def _get_ses():
+    global _SES
+    if _SES is not None:
+        return _SES
+    region = os.environ.get("AWS_REGION") or os.environ.get("REGION") or "us-east-1"
+    if not boto3:
+        return None
+    _SES = boto3.client("ses", region_name=region)
+    return _SES
 
 def lambda_handler(event, context):
     """
-    Lambda function to send cold emails via Amazon SES
+    Send an email via Amazon SES.
+    Accepts JSON body:
+      - recipient_email (str, required)
+      - subject (str, required)
+      - email_body or bodyText (str, optional if bodyHtml provided)
+      - bodyHtml (str, optional)
+      - sender_email (str, optional; falls back to SES_FROM_EMAIL/ FROM_EMAIL env)
+    Env:
+      - EMAIL_DRY_RUN=1|true (default on) to simulate sending
+      - AWS_REGION or REGION for SES region
+      - SES_FROM_EMAIL / FROM_EMAIL as default sender
+      - SES_REPLY_TO_EMAIL optional
     """
     try:
-        # Parse input
-        body = json.loads(event.get('body', '{}'))
-        
-        recipient_email = body.get('recipient_email')
-        subject = body.get('subject')
-        email_body = body.get('email_body')
-        sender_email = body.get('sender_email', os.environ.get('SES_FROM_EMAIL'))
-        
-        # Validate required fields
-        if not all([recipient_email, subject, email_body, sender_email]):
-            return {
-                'statusCode': 400,
-                'body': json.dumps({
-                    'error': 'Missing required fields: recipient_email, subject, email_body'
-                })
-            }
-        
-        # Send email
-        response = send_email(sender_email, recipient_email, subject, email_body)
-        
-        return {
-            'statusCode': 200,
-            'headers': {
-                'Content-Type': 'application/json',
-                'Access-Control-Allow-Origin': '*'
-            },
-            'body': json.dumps({
-                'message': 'Email sent successfully',
-                'message_id': response.get('MessageId'),
-                'recipient': recipient_email
-            })
-        }
-        
-    except ClientError as e:
-        logger.error(f"SES error: {str(e)}")
-        return {
-            'statusCode': 500,
-            'body': json.dumps({'error': f'Email service error: {str(e)}'})
-        }
-    except Exception as e:
-        logger.error(f"Error in send_cold_email: {str(e)}")
-        return {
-            'statusCode': 500,
-            'body': json.dumps({'error': 'Internal server error'})
-        }
+        raw = event.get("body") or "{}"
+        body = json.loads(raw) if isinstance(raw, str) else (raw or {})
 
-def send_email(sender, recipient, subject, body_text):
-    """
-    Send email using Amazon SES
-    """
-    try:
-        response = ses_client.send_email(
-            Destination={
-                'ToAddresses': [recipient],
-            },
-            Message={
-                'Body': {
-                    'Text': {
-                        'Charset': 'UTF-8',
-                        'Data': body_text,
-                    },
-                },
-                'Subject': {
-                    'Charset': 'UTF-8',
-                    'Data': subject,
-                },
-            },
+        to_addr   = (body.get("recipient_email") or "").strip()
+        subject   = (body.get("subject") or "").strip()
+        text_body = (body.get("email_body") or body.get("bodyText") or "").strip()
+        html_body = body.get("bodyHtml")
+        sender    = (body.get("sender_email") or
+                     os.environ.get("SES_FROM_EMAIL") or
+                     os.environ.get("FROM_EMAIL") or "").strip()
+
+        if not to_addr or not subject or (not text_body and not html_body):
+            logger.warning("missing_fields: to=%s subject?%s text?%s html?%s",
+                           bool(to_addr), bool(subject), bool(text_body), bool(html_body))
+            return _resp(400, {"error": "Missing required: recipient_email, subject, and one of email_body/bodyText or bodyHtml"})
+
+        if not sender:
+            return _resp(400, {"error": "Missing sender_email and SES_FROM_EMAIL/FROM_EMAIL env"})
+
+        dry_run = (os.environ.get("EMAIL_DRY_RUN", "1").lower() in ("1", "true", "yes"))
+        if dry_run:
+            fake_id = f"dryrun-{uuid.uuid4()}"
+            logger.info(json.dumps({
+                "op": "send_email", "dryRun": True, "to": to_addr, "subject": subject, "sender": sender
+            }))
+            return _resp(200, {"ok": True, "message_id": fake_id, "dry_run": True, "recipient": to_addr})
+
+        ses = _get_ses()
+        if not ses:
+            return _resp(500, {"error": "SES not available (boto3 missing or client init failed)"})
+
+        # Build SES body
+        body_payload = {}
+        if text_body:
+            body_payload["Text"] = {"Data": text_body, "Charset": "UTF-8"}
+        if html_body:
+            body_payload["Html"] = {"Data": html_body, "Charset": "UTF-8"}
+
+        resp = ses.send_email(
             Source=sender,
-            ReplyToAddresses=[
-                os.environ.get('SES_REPLY_TO_EMAIL', sender)
-            ]
+            Destination={"ToAddresses": [to_addr]},
+            Message={
+                "Subject": {"Data": subject, "Charset": "UTF-8"},
+                "Body": body_payload
+            },
+            ReplyToAddresses=[os.environ.get("SES_REPLY_TO_EMAIL", sender)]
         )
-        return response
+
+        msg_id = resp.get("MessageId")
+        logger.info(json.dumps({"op": "send_email", "dryRun": False, "to": to_addr, "subject": subject, "messageId": msg_id}))
+        return _resp(200, {"ok": True, "message_id": msg_id, "dry_run": False, "recipient": to_addr})
+
     except ClientError as e:
-        logger.error(f"Failed to send email: {e.response['Error']['Message']}")
-        raise
+        # Report the SES error back clearly
+        msg = getattr(e, "response", {}).get("Error", {}).get("Message", str(e))
+        logger.exception("SES ClientError: %s", msg)
+        return _resp(502, {"error": f"SES error: {msg}"})
+    except Exception as e:
+        logger.exception("send_cold_email failed")
+        return _resp(500, {"error": str(e)})
