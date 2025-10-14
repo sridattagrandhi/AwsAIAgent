@@ -23,14 +23,20 @@ def _resp(code=200, body=None):
 # cache client per cold start
 _SES = None
 def _get_ses():
-    global _SES
-    if _SES is not None:
-        return _SES
-    region = os.environ.get("AWS_REGION") or os.environ.get("REGION") or "us-east-1"
-    if not boto3:
+    """Create the SES client with a sensible region fallback."""
+    if boto3 is None:
         return None
-    _SES = boto3.client("ses", region_name=region)
-    return _SES
+    region = (
+        os.environ.get("AWS_REGION")
+        or os.environ.get("REGION")
+        or os.environ.get("AWS_DEFAULT_REGION")
+        or "us-east-1"  # safe default
+    )
+    try:
+        return boto3.client("ses", region_name=region)
+    except Exception:
+        logger.exception("Failed to init SES client")
+        return None
 
 def lambda_handler(event, context):
     """
@@ -67,7 +73,7 @@ def lambda_handler(event, context):
         if not sender:
             return _resp(400, {"error": "Missing sender_email and SES_FROM_EMAIL/FROM_EMAIL env"})
 
-        dry_run = (os.environ.get("EMAIL_DRY_RUN", "1").lower() in ("1", "true", "yes"))
+        dry_run = str(os.environ.get("EMAIL_DRY_RUN", "1")).strip().lower() in ("1", "true", "yes", "y")
         if dry_run:
             fake_id = f"dryrun-{uuid.uuid4()}"
             logger.info(json.dumps({

@@ -3,6 +3,9 @@ import json
 from .leads_store import upsert_lead
 from .constants import normalize_status
 from .log import jlog
+# at top of file
+from lambda_functions.leads_store_dynamo import upsert_lead, update_status, get_lead
+
 
 def _resp(code=200, body=None):
     return {
@@ -14,6 +17,8 @@ def _resp(code=200, body=None):
 def lambda_handler(event, context):
     try:
         body_raw = event.get("body") or "{}"
+        if isinstance(body_raw, bytes):
+            body_raw = body_raw.decode("utf-8", errors="replace")
         body = json.loads(body_raw) if isinstance(body_raw, str) else (body_raw or {})
 
         email = (body.get("email") or "").strip()

@@ -73,6 +73,7 @@ tmp/
 deployment/
 terraform.tfstate*
 .terraform/
+.aws-sam/
 
 # Streamlit
 .streamlit/

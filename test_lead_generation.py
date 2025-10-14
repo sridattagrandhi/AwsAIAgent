@@ -48,12 +48,16 @@ def test_lead_generation():
         
         print("✅ Test completed successfully!")
         print("Results saved to test_results.json")
-        
-        return retailers
-        
+
+        # Tests should not return values; assert the expected shape instead
+        assert isinstance(retailers, list), "find_shopify_stores should return a list"
+        # Optionally assert non-empty when the environment allows network calls
+        # assert len(retailers) > 0, "Expected at least one retailer"
+
     except Exception as e:
         print(f"❌ Test failed: {str(e)}")
-        return []
+        # Fail the test explicitly
+        assert False, f"test_lead_generation raised an exception: {e}"
 
 def test_single_store_extraction():
     """Test extracting info from a single known Shopify store"""
