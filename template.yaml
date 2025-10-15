@@ -1,49 +1,18 @@
-AWSTemplateFormatVersion: '2010-09-09'
-Transform: AWS::Serverless-2016-10-31
-Description: AI Sales Outreach Agent – Hackathon demo (API Gateway + Lambdas + DynamoDB + Bedrock)
-
-Globals:
-  Function:
-    Runtime: python3.12
-    Timeout: 25
-    MemorySize: 512
-    Environment:
-      Variables:
-        EMAIL_DRY_RUN: "1"
-        SEARCH_DRY_RUN: "1"
-        LEADS_TABLE_NAME: !Ref LeadsTable
-        SES_FROM_EMAIL: ""
-        BEDROCK_MODEL_ID: "us.amazon.nova-pro-v1:0"
-        BEDROCK_REGION: !Ref BedrockRegion
-  Api:
-    Cors:
-      AllowMethods: "'GET,POST,OPTIONS'"
-      AllowHeaders: "'Content-Type,Authorization'"
-      AllowOrigin: "'*'"
-
-Parameters:
-  FromEmail:
-    Type: String
-    Default: ""
-    Description: Default SES sender (verified address)
-  BedrockRegion:
-    Type: String
-    Default: us-east-1
-    AllowedValues:
-      - us-east-1
-      - us-west-2
-      - eu-central-1
-    Description: Region where Bedrock is enabled for your account
-
 Resources:
+  # ✅ Explicit API definition
   ApiGateway:
     Type: AWS::Serverless::Api
     Properties:
-      StageName: prod
+      StageName: Prod
+      Cors:
+        AllowMethods: "'GET,POST,OPTIONS'"
+        AllowHeaders: "'Content-Type,Authorization'"
+        AllowOrigin: "'*'"
 
   LeadsTable:
     Type: AWS::DynamoDB::Table
     Properties:
+      TableName: LeadsTable
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
         - AttributeName: pk
@@ -52,30 +21,31 @@ Resources:
         - AttributeName: pk
           KeyType: HASH
 
+  # --- Then attach your Lambda functions to this ApiGateway ---
   SearchShopify:
     Type: AWS::Serverless::Function
     Properties:
-      CodeUri: .
-      Handler: lambda_functions/search_shopify_retailers.lambda_handler
+      Handler: search_shopify_retailers.lambda_handler
+      CodeUri: lambda_functions
       Policies:
         - DynamoDBCrudPolicy:
-            TableName: !Ref LeadsTable
+            TableName: LeadsTable
       Events:
         PostSearch:
           Type: Api
           Properties:
-            RestApiId: !Ref ApiGateway
+            RestApiId: !Ref ApiGateway     # ✅ explicit reference
             Path: /search
             Method: post
 
   StoreLead:
     Type: AWS::Serverless::Function
     Properties:
-      CodeUri: .
-      Handler: lambda_functions/store_lead_data.lambda_handler
+      Handler: store_lead_data.lambda_handler
+      CodeUri: lambda_functions
       Policies:
         - DynamoDBCrudPolicy:
-            TableName: !Ref LeadsTable
+            TableName: LeadsTable
       Events:
         PostStore:
           Type: Api
@@ -87,13 +57,13 @@ Resources:
   UpdateLeadStatus:
     Type: AWS::Serverless::Function
     Properties:
-      CodeUri: .
-      Handler: lambda_functions/update_lead_status.lambda_handler
+      Handler: update_lead_status.lambda_handler
+      CodeUri: lambda_functions
       Policies:
         - DynamoDBCrudPolicy:
-            TableName: !Ref LeadsTable
+            TableName: LeadsTable
       Events:
-        PostUpdate:
+        PostUpdateStatus:
           Type: Api
           Properties:
             RestApiId: !Ref ApiGateway
@@ -103,8 +73,8 @@ Resources:
   SendEmail:
     Type: AWS::Serverless::Function
     Properties:
-      CodeUri: .
-      Handler: lambda_functions/send_cold_email.lambda_handler
+      Handler: send_cold_email.lambda_handler
+      CodeUri: lambda_functions
       Policies:
         - Statement:
             - Effect: Allow
@@ -112,9 +82,6 @@ Resources:
                 - ses:SendEmail
                 - ses:SendRawEmail
               Resource: "*"
-      Environment:
-        Variables:
-          SES_FROM_EMAIL: !Ref FromEmail
       Events:
         PostEmail:
           Type: Api
@@ -126,16 +93,14 @@ Resources:
   DraftEmail:
     Type: AWS::Serverless::Function
     Properties:
-      CodeUri: .
-      Handler: lambda_functions/bedrock_email_draft.lambda_handler
+      Handler: bedrock_email_draft.lambda_handler
+      CodeUri: lambda_functions
       Policies:
         - Statement:
             - Effect: Allow
               Action:
                 - bedrock:InvokeModel
               Resource: "*"
-        - DynamoDBReadPolicy:
-            TableName: !Ref LeadsTable
       Events:
         PostDraft:
           Type: Api
@@ -146,6 +111,7 @@ Resources:
 
 Outputs:
   ApiUrl:
-    Value: !Sub "https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/prod"
+    Description: API Gateway base URL
+    Value: !Sub "https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/Prod"
   LeadsTableName:
     Value: !Ref LeadsTable

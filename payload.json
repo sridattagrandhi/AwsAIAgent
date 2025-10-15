@@ -1,0 +1,10 @@
+{
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        { "text": "Write a short, friendly cold email to a Shopify shoe brand about improving conversions." }
+      ]
+    }
+  ]
+}

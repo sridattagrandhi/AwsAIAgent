@@ -10,20 +10,25 @@ except Exception:
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
+
 def _resp(code=200, body=None):
     return {
         "statusCode": code,
         "headers": {
             "Content-Type": "application/json",
-            "Access-Control-Allow-Origin": "*"
+            "Access-Control-Allow-Origin": "*",
         },
-        "body": json.dumps(body if body is not None else {"ok": True})
+        "body": json.dumps(body if body is not None else {"ok": True}),
     }
+
 
 # cache client per cold start
 _SES = None
 def _get_ses():
     """Create the SES client with a sensible region fallback."""
+    global _SES
+    if _SES is not None:
+        return _SES
     if boto3 is None:
         return None
     region = (
@@ -33,10 +38,12 @@ def _get_ses():
         or "us-east-1"  # safe default
     )
     try:
-        return boto3.client("ses", region_name=region)
+        _SES = boto3.client("ses", region_name=region)
+        return _SES
     except Exception:
         logger.exception("Failed to init SES client")
         return None
+
 
 def lambda_handler(event, context):
     """
@@ -46,7 +53,8 @@ def lambda_handler(event, context):
       - subject (str, required)
       - email_body or bodyText (str, optional if bodyHtml provided)
       - bodyHtml (str, optional)
-      - sender_email (str, optional; falls back to SES_FROM_EMAIL/ FROM_EMAIL env)
+      - sender_email (str, optional; falls back to SES_FROM_EMAIL / FROM_EMAIL env)
+
     Env:
       - EMAIL_DRY_RUN=1|true (default on) to simulate sending
       - AWS_REGION or REGION for SES region
@@ -55,6 +63,8 @@ def lambda_handler(event, context):
     """
     try:
         raw = event.get("body") or "{}"
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8", errors="replace")
         body = json.loads(raw) if isinstance(raw, str) else (raw or {})
 
         to_addr   = (body.get("recipient_email") or "").strip()
@@ -66,9 +76,13 @@ def lambda_handler(event, context):
                      os.environ.get("FROM_EMAIL") or "").strip()
 
         if not to_addr or not subject or (not text_body and not html_body):
-            logger.warning("missing_fields: to=%s subject?%s text?%s html?%s",
-                           bool(to_addr), bool(subject), bool(text_body), bool(html_body))
-            return _resp(400, {"error": "Missing required: recipient_email, subject, and one of email_body/bodyText or bodyHtml"})
+            logger.warning(
+                "missing_fields: to=%s subject?%s text?%s html?%s",
+                bool(to_addr), bool(subject), bool(text_body), bool(html_body)
+            )
+            return _resp(400, {
+                "error": "Missing required: recipient_email, subject, and one of email_body/bodyText or bodyHtml"
+            })
 
         if not sender:
             return _resp(400, {"error": "Missing sender_email and SES_FROM_EMAIL/FROM_EMAIL env"})
@@ -86,24 +100,26 @@ def lambda_handler(event, context):
             return _resp(500, {"error": "SES not available (boto3 missing or client init failed)"})
 
         # Build SES body
-        body_payload = {}
+        ses_body = {}
         if text_body:
-            body_payload["Text"] = {"Data": text_body, "Charset": "UTF-8"}
+            ses_body["Text"] = {"Data": text_body, "Charset": "UTF-8"}
         if html_body:
-            body_payload["Html"] = {"Data": html_body, "Charset": "UTF-8"}
+            ses_body["Html"] = {"Data": html_body, "Charset": "UTF-8"}
 
         resp = ses.send_email(
             Source=sender,
             Destination={"ToAddresses": [to_addr]},
             Message={
                 "Subject": {"Data": subject, "Charset": "UTF-8"},
-                "Body": body_payload
+                "Body": ses_body
             },
             ReplyToAddresses=[os.environ.get("SES_REPLY_TO_EMAIL", sender)]
         )
 
         msg_id = resp.get("MessageId")
-        logger.info(json.dumps({"op": "send_email", "dryRun": False, "to": to_addr, "subject": subject, "messageId": msg_id}))
+        logger.info(json.dumps({
+            "op": "send_email", "dryRun": False, "to": to_addr, "subject": subject, "messageId": msg_id
+        }))
         return _resp(200, {"ok": True, "message_id": msg_id, "dry_run": False, "recipient": to_addr})
 
     except ClientError as e:

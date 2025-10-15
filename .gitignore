@@ -61,6 +61,8 @@ test_results.json
 advanced_test_leads.json
 leads.json
 *.test.json
+output.json
+playload.json
 
 # Temporary files
 *.tmp
@@ -77,3 +79,7 @@ terraform.tfstate*
 
 # Streamlit
 .streamlit/
+
+# sam
+.samignore
+samconfig.toml

@@ -1,69 +1,120 @@
-import os, requests, streamlit as st
+# streamlit_app.py
+import streamlit as st
+import requests
+import json
+import os
 
-st.set_page_config(page_title="AI Sales Outreach Agent", layout="wide")
-st.title("🤖 AI Sales Outreach Agent")
+# --- CONFIG ---
+API_URL = os.getenv("API_URL") or st.secrets.get("API_URL", "")
+st.set_page_config(
+    page_title="AI Sales Outreach Agent",
+    layout="wide",
+    page_icon="🤖"
+)
 
-DEFAULT_API = os.environ.get("API_URL", "").rstrip("/")
+# --- HEADER ---
+st.markdown(
+    """
+    <h2 style='text-align:center;color:#6C63FF;'>🤖 AI Sales Outreach Agent</h2>
+    <p style='text-align:center;color:gray;'>
+    Powered by AWS Bedrock · DynamoDB · Lambda · API Gateway
+    </p>
+    <hr style='margin-top:-5px;'>
+    """,
+    unsafe_allow_html=True,
+)
 
-with st.sidebar:
-  api = st.text_input("API URL", DEFAULT_API)
-  st.caption("Use the API URL from 'sam deploy' output.")
-  sender = st.text_input("SES From Email", os.environ.get("SES_FROM_EMAIL",""))
+# --- SIDEBAR ---
+st.sidebar.header("⚙️ Configuration")
+st.sidebar.write("Update environment or endpoint as needed.")
+api_input = st.sidebar.text_input("API Endpoint", API_URL, help="Your API Gateway Prod URL")
+if api_input:
+    API_URL = api_input.strip()
 
-tab1, tab2, tab3, tab4 = st.tabs(["🔎 Find Leads", "📥 Store Lead", "✉️ Draft & Send", "📈 Update Status"])
+# --- TABS ---
+tab1, tab2, tab3, tab4 = st.tabs(
+    ["🔍 Search Shopify Brands", "📥 Store Lead", "✉️ Draft Email", "📈 Update Lead Status"]
+)
 
+# --- Search Tab ---
 with tab1:
-  q = st.text_input("Search query", "sustainable sneakers california")
-  limit = st.slider("Limit", 1, 20, 5)
-  if st.button("Search"):
-    r = requests.post(f"{api}/search", json={"query": q, "limit": limit}, timeout=30)
-    st.write(r.status_code, r.json())
+    st.subheader("🔍 Search Shopify Retailers (mocked data)")
+    keyword = st.text_input("Enter keyword (e.g., 'shoes', 'fashion')", "shoes")
+    if st.button("Search", use_container_width=True):
+        try:
+            with st.spinner("Searching Shopify retailers..."):
+                res = requests.post(f"{API_URL}/search", json={"keyword": keyword})
+                st.success("✅ Search complete!")
+                st.json(res.json())
+        except Exception as e:
+            st.error(f"Error: {e}")
 
+# --- Store Lead Tab ---
 with tab2:
-  email = st.text_input("Lead email")
-  company = st.text_input("Company name")
-  website = st.text_input("Website")
-  notes = st.text_area("Notes")
-  if st.button("Store Lead"):
-    r = requests.post(f"{api}/leads", json={"email": email, "company": company, "website": website, "notes": notes}, timeout=30)
-    st.write(r.status_code, r.json())
+    st.subheader("📥 Store New Lead")
+    email = st.text_input("Lead Email", "alice@example.com")
+    company = st.text_input("Company Name", "Allbirds")
+    campaign_id = st.text_input("Campaign ID", "demo-001")
+    note = st.text_area("Note", "first touch")
+    if st.button("Store Lead", use_container_width=True):
+        payload = {
+            "email": email,
+            "company_name": company,
+            "campaign_id": campaign_id,
+            "status": "SENT",
+            "note": note,
+        }
+        try:
+            with st.spinner("Storing lead..."):
+                res = requests.post(f"{API_URL}/leads", json=payload)
+                data = res.json()
+                st.success("✅ Lead stored successfully!")
+                st.json(data)
+        except Exception as e:
+            st.error(f"Error: {e}")
 
+# --- Draft Email Tab ---
 with tab3:
-  company = st.text_input("Company for draft")
-  website = st.text_input("Company website (optional)")
-  desc = st.text_area("Description/context", "")
-  pain = st.text_input("Pain point", "improving Shopify conversions")
-  pitch = st.text_area("Your product pitch", "AI agent that finds leads and personalizes outreach")
-  if st.button("Draft Email"):
-    r = requests.post(f"{api}/email/draft", json={
-      "companyName": company,
-      "website": website,
-      "description": desc,
-      "painPoint": pain,
-      "productPitch": pitch
-    }, timeout=60)
-    if r.ok:
-      st.session_state["draft"] = r.json().get("draft","")
-      st.success("Draft generated")
-    else:
-      st.error(r.text)
-  draft = st.text_area("Draft", st.session_state.get("draft",""), height=220)
-  to = st.text_input("Send To")
-  subject = st.text_input("Subject (override)", "")
-  if st.button("Send (SES, dry-run by default)"):
-    payload = {"recipient_email": to, "email_body": draft, "sender_email": sender}
-    if subject:
-      payload["subject"] = subject
-    r = requests.post(f"{api}/email/send", json=payload, timeout=30)
-    st.write(r.status_code, r.json())
+    st.subheader("✉️ Generate Cold Email (via Bedrock Nova Pro)")
+    company_name = st.text_input("Company Name", "Allbirds", key="draft_company")
+    website = st.text_input("Website", "https://www.allbirds.com")
+    description = st.text_area("Description", "Sustainable footwear brand making eco-friendly shoes.")
+    if st.button("Generate Email Draft", use_container_width=True):
+        payload = {
+            "companyName": company_name,
+            "website": website,
+            "description": description
+        }
+        try:
+            with st.spinner("Generating draft with Bedrock Nova Pro..."):
+                res = requests.post(f"{API_URL}/email/draft", json=payload)
+                data = res.json()
+                st.success("✅ Draft generated!")
+                st.markdown("### 📧 Suggested Cold Email")
+                st.text_area("Generated Draft", data.get("draft", ""), height=350)
+                st.caption(f"Model used: {data.get('model', 'amazon.nova-pro-v1:0')}")
+        except Exception as e:
+            st.error(f"Error: {e}")
 
+# --- Update Status Tab ---
 with tab4:
-  email = st.text_input("Lead email to update")
-  campaign = st.text_input("Campaign ID", "demo-001")
-  status = st.selectbox("Status", ["", "SENT", "NEUTRAL", "WARM", "COLD", "UNSUBSCRIBE", "BOUNCED"])
-  reply = st.text_area("Paste reply (optional)")
-  if st.button("Update Status"):
-    r = requests.post(f"{api}/leads/status", json={
-      "email": email, "campaign_id": campaign, "status": status or None, "replyText": reply or None
-    }, timeout=30)
-    st.write(r.status_code, r.json())
+    st.subheader("📈 Update Lead Status")
+    email_upd = st.text_input("Email", "alice@example.com", key="upd_email")
+    campaign_upd = st.text_input("Campaign ID", "demo-001", key="upd_campaign")
+    status = st.selectbox("Status", ["WARM", "COLD", "BOUNCED", "UNSUBSCRIBE"], index=0)
+    reply_text = st.text_area("Reply Text", "Let's talk next week")
+    if st.button("Update Lead Status", use_container_width=True):
+        payload = {
+            "email": email_upd,
+            "campaign_id": campaign_upd,
+            "status": status,
+            "replyText": reply_text,
+        }
+        try:
+            with st.spinner("Updating lead status..."):
+                res = requests.post(f"{API_URL}/leads/status", json=payload)
+                data = res.json()
+                st.success("✅ Lead updated successfully!")
+                st.json(data)
+        except Exception as e:
+            st.error(f"Error: {e}")
