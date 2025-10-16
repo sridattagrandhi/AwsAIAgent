@@ -6,13 +6,14 @@ from leads_store_dynamo import update_status as ddb_update_status  # <-- absolut
 
 def classify_reply_simple(reply_text: str) -> str:
     t = (reply_text or "").lower()
-    if any(x in t for x in ["unsubscribe", "remove me", "stop emailing", "opt out"]):
+
+    if any(x in t for x in ["unsubscribe", "remove me", "stop emailing", "opt out", "do not contact"]):
         return "UNSUBSCRIBE"
-    if any(x in t for x in ["not interested", "no thanks", "not now", "decline"]):
+    if any(x in t for x in ["not interested", "no thanks", "not now", "decline", "we're good", "already have", "not a fit"]):
         return "COLD"
-    if any(x in t for x in ["interested", "let's talk", "schedule", "call", "demo", "book a time"]):
+    if any(x in t for x in ["interested", "let's talk", "schedule", "book", "demo", "call", "meet", "next week", "follow up", "sounds good", "sure"]):
         return "WARM"
-    if any(x in t for x in ["bounce", "undeliverable", "mail failure"]):
+    if any(x in t for x in ["bounce", "undeliverable", "mail failure", "address not found"]):
         return "BOUNCED"
     return "NEUTRAL"
 
