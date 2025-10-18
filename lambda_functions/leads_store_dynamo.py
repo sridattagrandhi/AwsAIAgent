@@ -20,21 +20,6 @@ def _table():
 def _pk(email: str) -> str:
     return f"LEAD#{email.lower()}"
 
-def upsert_lead(lead: Dict[str, Any]) -> Dict[str, Any]:
-    """Stores the lead dict under attribute 'data' to keep a simple item shape."""
-    now = int(time.time())
-    email = (lead.get("email") or "").lower()
-    if not email:
-        raise ValueError("lead.email required")
-    item = {
-        "pk": _pk(email),
-        "email": email,
-        "data": lead,          # <-- canonical payload lives under 'data'
-        "updatedAt": now,
-    }
-    _table().put_item(Item=item)
-    return {"ok": True, "email": email, "updatedAt": now}
-
 def get_lead(email: str) -> Optional[Dict[str, Any]]:
     try:
         res = _table().get_item(Key={"pk": _pk(email)})
@@ -42,6 +27,52 @@ def get_lead(email: str) -> Optional[Dict[str, Any]]:
         return None
     item = res.get("Item")
     return item.get("data") if item else None
+
+def upsert_lead(lead: Dict[str, Any]) -> Dict[str, Any]:
+    """Stores the lead dict under attribute 'data' to keep a simple item shape."""
+    now = int(time.time())
+    email = (lead.get("email") or "").lower()
+    if not email:
+        raise ValueError("lead.email required")
+
+    # merge minimal non-destructive fields with existing
+    existing = get_lead(email)
+    if existing:
+        # preserve/merge company aliases if changed
+        old_company = existing.get("company")
+        new_company = lead.get("company") or old_company
+        if old_company and new_company and new_company != old_company:
+            aliases = set(existing.get("aliases", []))
+            aliases.add(old_company)
+            lead["aliases"] = sorted(list(aliases))
+
+        # preserve existing campaigns if caller didn't provide them
+        if "campaigns" not in lead and "campaigns" in existing:
+            lead["campaigns"] = existing["campaigns"]
+
+        # preserve profile/signals unless caller provided richer info
+        if "profile" not in lead and "profile" in existing:
+            lead["profile"] = existing["profile"]
+        if "signals" not in lead and "signals" in existing:
+            lead["signals"] = existing["signals"]
+
+        # preserve prior scores if not provided
+        if "fitScore" not in lead and "fitScore" in existing:
+            lead["fitScore"] = existing["fitScore"]
+        if "intentScore" not in lead and "intentScore" in existing:
+            lead["intentScore"] = existing["intentScore"]
+
+        # final company set
+        lead["company"] = new_company
+
+    item = {
+        "pk": _pk(email),
+        "email": email,
+        "data": lead,          # canonical payload lives under 'data'
+        "updatedAt": now,
+    }
+    _table().put_item(Item=item)
+    return {"ok": True, "email": email, "updatedAt": now}
 
 def update_status(email: str, campaign_id: str, status: Optional[str], reply_text: Optional[str]) -> Dict[str, Any]:
     """Read-modify-write against the 'data' payload for consistency."""
@@ -62,7 +93,6 @@ def update_status(email: str, campaign_id: str, status: Optional[str], reply_tex
 def update_send_metadata(email: str, campaign_id: str, message_id: str, sent_at: int):
     """
     Save SES MessageId + lastSentAt on the lead's campaign node within 'data'.
-    IMPORTANT: keep schema consistent with upsert/get (i.e., mutate lead['campaigns'] inside 'data').
     """
     email = (email or "").lower()
     if not email:

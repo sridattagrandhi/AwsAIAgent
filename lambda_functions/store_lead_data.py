@@ -1,17 +1,21 @@
 # lambda_functions/store_lead_data.py
 import json
-from constants import normalize_status           # <-- absolute import
-from log import jlog                             # <-- absolute import
-from leads_store_dynamo import upsert_lead as ddb_upsert_lead  # <-- absolute import
+from decimal import Decimal
+
+from leads_store_dynamo import upsert_lead
+from constants import normalize_status
+from log import jlog
+
+def _json_default(obj):
+    if isinstance(obj, Decimal):
+        return float(obj)
+    raise TypeError
 
 def _resp(code=200, body=None):
     return {
         "statusCode": code,
-        "headers": {
-            "Content-Type": "application/json",
-            "Access-Control-Allow-Origin": "*",
-        },
-        "body": json.dumps(body if body is not None else {"ok": True}),
+        "headers": {"Content-Type": "application/json", "Access-Control-Allow-Origin": "*"},
+        "body": json.dumps(body if body is not None else {"ok": True}, default=_json_default)
     }
 
 def lambda_handler(event, context):
@@ -28,8 +32,7 @@ def lambda_handler(event, context):
         note = (body.get("note") or "").strip()
 
         if not (email and company_name and campaign_id):
-            jlog(op="store_lead", ok=False, err="missing_fields",
-                 email=email, campaignId=campaign_id)
+            jlog(op="store_lead", ok=False, err="missing_fields", email=email, campaignId=campaign_id)
             return _resp(400, {"error": "Missing required fields: email, company_name, campaign_id"})
 
         lead = {
@@ -37,11 +40,9 @@ def lambda_handler(event, context):
             "company": company_name,
             "campaigns": {campaign_id: {"status": status, "note": note}}
         }
-
-        result = ddb_upsert_lead(lead)
+        meta = upsert_lead(lead)
         jlog(op="store_lead", ok=True, email=email, campaignId=campaign_id, status=status)
-        return _resp(200, {"ok": True, "lead": lead, "meta": result})
-
+        return _resp(200, {"ok": True, "lead": lead, "meta": meta})
     except Exception as e:
         jlog(op="store_lead", ok=False, err=str(e))
         return _resp(500, {"error": str(e)})

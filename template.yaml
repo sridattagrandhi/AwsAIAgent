@@ -14,7 +14,8 @@ Globals:
         SEARCH_DRY_RUN: "1"
         BEDROCK_MODEL_ID: "amazon.nova-pro-v1:0"
         BEDROCK_REGION: "us-east-1"
-        LEADS_TABLE_NAME: "LeadsTable"   # plain string here; we set TableName below
+        LEADS_TABLE_NAME: "LeadsTable"
+
   Api:
     Cors:
       AllowMethods: "'GET,POST,OPTIONS'"
@@ -108,8 +109,6 @@ Resources:
       Environment:
         Variables:
           SES_FROM_EMAIL: !Ref FromEmail
-          # EMAIL_DRY_RUN inherited from Globals (keep "1" for now)
-          # SES_CONFIG_SET: "outreach-config"  # optional: set if you create a configuration set in SES
       Events:
         PostEmail:
           Type: Api
@@ -136,11 +135,24 @@ Resources:
             Path: /email/draft
             Method: post
 
+  LeadEnrich:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: lead_enrich.lambda_handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: LeadsTable
+      Events:
+        PostEnrich:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /leads/enrich
+            Method: post
+
   InboundEmailsBucket:
     Type: AWS::S3::Bucket
     DeletionPolicy: Delete
-    Properties:
-      BucketName: !Sub "${AWS::StackName}-inbound-emails"
 
   SesEventsTopic:
     Type: AWS::SNS::Topic
@@ -160,29 +172,21 @@ Resources:
           Properties:
             Topic: !Ref SesEventsTopic
 
-    SesInboundParser:
+  # ✅ FIXED INDENTATION – aligned with other resources
+  SesInboundParser:
     Type: AWS::Serverless::Function
     Properties:
       Handler: ses_inbound_parser.lambda_handler
       Policies:
-        # Inline S3 read policy that does NOT Ref the bucket resource (breaks the cycle)
-        - Statement:
-            - Effect: Allow
-              Action:
-                - s3:GetObject
-                - s3:GetObjectVersion
-              Resource: !Sub "arn:aws:s3:::${AWS::StackName}-inbound-emails/*"
-            - Effect: Allow
-              Action:
-                - s3:ListBucket
-              Resource: !Sub "arn:aws:s3:::${AWS::StackName}-inbound-emails"
+        - AmazonS3ReadOnlyAccess
+        - DynamoDBCrudPolicy:
+            TableName: LeadsTable
       Events:
         EmailIngress:
           Type: S3
           Properties:
             Bucket: !Ref InboundEmailsBucket
             Events: s3:ObjectCreated:*
-
 
 Outputs:
   ApiUrl:

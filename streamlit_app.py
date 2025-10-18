@@ -1,39 +1,45 @@
-import os
-import time
-import json
-import typing as t
+# streamlit_app.py
+import os, json, requests
+import streamlit as st
 from datetime import datetime
 
-import streamlit as st
-import requests
-
-# Optional: live Dynamo view (only if boto3 is installed & you have AWS creds)
 try:
     import boto3
-    from botocore.exceptions import ClientError
     BOTO3_OK = True
 except Exception:
     BOTO3_OK = False
 
-# ---------------------------
-# Config & helpers
-# ---------------------------
+# ---- Config ----
 st.set_page_config(page_title="AI Sales Outreach Agent", page_icon="🤖", layout="wide")
 
-def _read_secret(key: str, default: str = "") -> str:
+def _secret(k, d=""):
     try:
-        return st.secrets.get(key, default)
+        return st.secrets.get(k, d)
     except Exception:
-        return default
+        return d
 
-API_URL = os.getenv("API_URL") or _read_secret("API_URL", "")
-AWS_REGION = os.getenv("AWS_REGION") or _read_secret("AWS_REGION", "us-east-1")
-DEFAULT_SENDER = os.getenv("SES_FROM_EMAIL") or _read_secret("SES_FROM_EMAIL", "")
+API_URL = os.getenv("API_URL") or _secret("API_URL", "")
+AWS_REGION = os.getenv("AWS_REGION") or _secret("AWS_REGION", "us-east-1")
+DEFAULT_SENDER = os.getenv("SES_FROM_EMAIL") or _secret("SES_FROM_EMAIL", "")
 
 PRIMARY = "#6C63FF"
 MUTED = "#6b7280"
 
-def status_chip(s: str) -> str:
+# ---- Helpers ----
+def api_post(path, payload):
+    """POST request to API Gateway endpoint"""
+    url = API_URL.rstrip("/") + path
+    try:
+        r = requests.post(url, json=payload, timeout=30)
+        r.raise_for_status()
+        return r.json()
+    except requests.exceptions.RequestException as e:
+        return {"error": str(e)}
+
+def chip(text, bg):
+    return f'<span style="padding:2px 8px;border-radius:999px;background:{bg};color:#fff;font-weight:700">{text}</span>'
+
+def status_chip(s):
     s = (s or "").upper()
     color = {
         "WARM": "#16a34a",
@@ -44,292 +50,197 @@ def status_chip(s: str) -> str:
         "SENT": "#8b5cf6",
         "BOOKED": "#22c55e",
     }.get(s, "#6b7280")
-    return f"""<span style="
-        display:inline-block;padding:2px 8px;border-radius:999px;
-        background:{color};color:white;font-size:12px;font-weight:600;">
-        {s}
-    </span>"""
+    return chip(s, color)
 
-def dt(ts: t.Optional[int]) -> str:
-    if not ts: return "—"
+def score_chip(n):
+    try:
+        n = int(n or 0)
+    except:
+        n = 0
+    color = "#16a34a" if n >= 70 else "#eab308" if n >= 40 else "#ef4444"
+    return chip(str(n), color)
+
+def dt(ts):
+    if not ts:
+        return "—"
     try:
         return datetime.fromtimestamp(int(ts)).strftime("%Y-%m-%d %H:%M:%S")
     except Exception:
         return str(ts)
 
-def api_post(path: str, payload: dict, timeout: int = 20) -> dict:
-    if not API_URL:
-        raise RuntimeError("API_URL is not set. Use the sidebar to set it.")
-    url = API_URL.rstrip("/") + path
-    r = requests.post(url, json=payload, timeout=timeout)
-    try:
-        return r.json()
-    except Exception:
-        return {"error": f"Non-JSON response ({r.status_code})", "text": r.text}
+# ---- Sidebar ----
+st.sidebar.header("⚙️ Config")
+API_URL = st.sidebar.text_input(
+    "API URL", API_URL, placeholder="https://<api>.execute-api.us-east-1.amazonaws.com/Prod"
+)
+AWS_REGION = st.sidebar.text_input("AWS Region", AWS_REGION)
+DEFAULT_SENDER = st.sidebar.text_input("Default Sender", DEFAULT_SENDER or "you@domain.com")
+use_direct_dynamo = st.sidebar.checkbox("Use direct DynamoDB read (live)", value=BOTO3_OK)
 
-def safe_json(v: t.Any) -> str:
-    try:
-        return json.dumps(v, indent=2, ensure_ascii=False)
-    except Exception:
-        return str(v)
-
-# ---------------------------
-# Sidebar
-# ---------------------------
-st.sidebar.header("⚙️ Configuration")
-API_URL = st.sidebar.text_input("API URL", value=API_URL, placeholder="https://xxx.execute-api.us-east-1.amazonaws.com/Prod")
-AWS_REGION = st.sidebar.text_input("AWS Region", value=AWS_REGION)
-DEFAULT_SENDER = st.sidebar.text_input("Sender (for SES)", value=DEFAULT_SENDER, placeholder="you@domain.com")
-st.sidebar.caption("Tip: set API_URL / AWS_REGION / SES_FROM_EMAIL as env vars or in .streamlit/secrets.toml")
-
-st.sidebar.markdown("---")
-auto_refresh = st.sidebar.checkbox("Auto-refresh Lead Viewer", value=True)
-refresh_secs = st.sidebar.slider("Refresh interval (secs)", 5, 60, 10)
-use_direct_dynamo = st.sidebar.checkbox("Use direct DynamoDB read (live)", value=BOTO3_OK and True, help="Requires boto3 + AWS creds; reads LeadsTable directly")
-
-st.sidebar.markdown("---")
-st.sidebar.caption("Built for AWS Hackathon 2025 • Bedrock + Lambda + API Gateway + DynamoDB + SES")
-
-# Optional auto-refresh (only triggers when viewer tab rendered)
-if auto_refresh:
-    st.sidebar.write(f"Auto-refresh enabled: every {refresh_secs}s")
-
-# ---------------------------
-# Header
-# ---------------------------
 st.markdown(
     f"""
-    <div style="text-align:center">
-      <h2 style="margin-bottom:0;color:{PRIMARY}">🤖 AI Sales Outreach Agent</h2>
-      <div style="color:{MUTED}">Amazon Bedrock · Lambda · API Gateway · DynamoDB · SES</div>
-    </div>
-    <hr style="margin-top:16px;margin-bottom:8px;">
-    """,
+<div style="text-align:center">
+  <h2 style="margin-bottom:0;color:{PRIMARY}">🤖 AI Sales Outreach Agent</h2>
+  <div style="color:{MUTED}">Bedrock · Lambda · API Gateway · DynamoDB · SES</div>
+</div>
+<hr/>
+""",
     unsafe_allow_html=True,
 )
 
-# ---------------------------
-# Tabs
-# ---------------------------
+# ---- Tabs ----
 tab_search, tab_store, tab_draft, tab_send, tab_view = st.tabs(
-    ["🔍 Search", "📥 Store Lead", "✉️ Draft Email", "🚀 Send Email (dry-run)", "📊 Lead Viewer"]
+    ["🔍 Search", "📥 Store/Enrich Lead", "✉️ Draft Email", "🚀 Send (dry-run)", "📊 Lead Viewer"]
 )
 
-# ---------------------------
-# Tab: Search (mock or your Lambda)
-# ---------------------------
+# -----------------------
+# SEARCH TAB
+# -----------------------
 with tab_search:
     st.subheader("🔍 Find Shopify Leads")
     kw = st.text_input("Keyword", "shoes")
-    if st.button("Search", use_container_width=True):
-        try:
-            res = api_post("/search", {"keyword": kw})
-            if "error" in res:
-                st.error(res["error"])
-                st.code(res.get("text", ""), language="json")
-            else:
-                st.success("Search complete")
-                st.json(res)
-        except Exception as e:
-            st.error(str(e))
+    if st.button("Search"):
+        res = api_post("/search", {"keyword": kw})
+        st.json(res)
 
-# ---------------------------
-# Tab: Store Lead
-# ---------------------------
+# -----------------------
+# STORE / ENRICH TAB
+# -----------------------
 with tab_store:
     st.subheader("📥 Store a Lead")
-    col1, col2 = st.columns(2)
-    with col1:
-        email = st.text_input("Lead Email", "alice@example.com")
-        company = st.text_input("Company", "Allbirds")
-    with col2:
-        campaign = st.text_input("Campaign ID", "demo-001")
-        note = st.text_input("Note", "first touch")
-
-    if st.button("Store Lead", use_container_width=True):
-        try:
-            payload = {
-                "email": email,
-                "company_name": company,
-                "campaign_id": campaign,
-                "status": "SENT",
-                "note": note,
-            }
-            res = api_post("/leads", payload)
-            if "error" in res:
-                st.error(res["error"])
-            else:
-                st.success("Lead stored")
-            st.json(res)
-        except Exception as e:
-            st.error(str(e))
-
-# ---------------------------
-# Tab: Draft Email (Bedrock)
-# ---------------------------
-with tab_draft:
-    st.subheader("✉️ Generate Cold Email (Bedrock Nova Pro)")
     c1, c2 = st.columns(2)
     with c1:
-        company_name = st.text_input("Company Name", "Allbirds", key="draft_company")
-        website = st.text_input("Website", "https://www.allbirds.com")
+        email = st.text_input("Lead Email", "alice@example.com")
+        company = st.text_input("Company", "Allbirds")
+        campaign = st.text_input("Campaign ID", "demo-001")
     with c2:
-        description = st.text_area("Description", "Sustainable footwear brand making eco-friendly shoes.", height=100)
+        note = st.text_input("Note", "first touch")
+        website = st.text_input("Website (optional)", "https://www.allbirds.com")
 
-    if st.button("Generate Draft", use_container_width=True):
-        try:
-            res = api_post("/email/draft", {
-                "companyName": company_name,
-                "website": website,
-                "description": description
-            })
-            if "error" in res:
-                st.error(res["error"])
-                st.code(res.get("text", ""), language="json")
-            else:
-                st.success("Draft generated")
-                st.markdown("**Model:** " + res.get("model", "amazon.nova-pro-v1:0"))
-                st.text_area("Generated Draft", res.get("draft", ""), height=300)
-        except Exception as e:
-            st.error(str(e))
-
-# ---------------------------
-# Tab: Send Email (dry-run)
-# ---------------------------
-with tab_send:
-    st.subheader("🚀 Send Email (dry-run via SES)")
     colA, colB = st.columns(2)
     with colA:
-        se_to = st.text_input("Recipient", "alice@example.com")
-        se_sender = st.text_input("Sender", DEFAULT_SENDER or "you@yourdomain.com")
-        se_campaign = st.text_input("Campaign ID", "demo-001")
-    with colB:
-        se_subject = st.text_input("Subject", "Quick idea to lift conversions")
-        se_body = st.text_area("Body (text)", "Hi Alice — quick idea to improve conversions…", height=120)
-
-    st.caption("Dry-run returns a fake MessageId but still writes send metadata to DynamoDB.")
-
-    if st.button("Send (dry-run)", use_container_width=True):
-        try:
-            res = api_post("/email/send", {
-                "recipient_email": se_to,
-                "sender_email": se_sender,
-                "campaign_id": se_campaign,
-                "subject": se_subject,
-                "email_body": se_body
+        if st.button("Store Lead"):
+            res = api_post("/leads", {
+                "email": email, "company_name": company, "campaign_id": campaign,
+                "status": "SENT", "note": note, "website": website
             })
-            if "error" in res:
-                st.error(res["error"])
-            else:
-                st.success("Send simulated")
             st.json(res)
-        except Exception as e:
-            st.error(str(e))
+    with colB:
+        if st.button("Enrich Lead"):
+            res = api_post("/leads/enrich", {
+                "email": email, "company_name": company, "website": website
+            })
+            st.json(res)
 
-# ---------------------------
-# Tab: Lead Viewer (live)
-# ---------------------------
+# -----------------------
+# DRAFT TAB
+# -----------------------
+with tab_draft:
+    st.subheader("✉️ Draft via Bedrock")
+    company_name = st.text_input("Company Name", "Allbirds", key="d_name")
+    site = st.text_input("Website", "https://www.allbirds.com", key="d_site")
+    desc = st.text_area("Description", "Sustainable footwear brand", key="d_desc", height=100)
+    lead_email = st.text_input("Lead Email", "alice@example.com", key="d_email")
+    if st.button("Generate Draft"):
+        res = api_post("/email/draft", {
+            "companyName": company_name, "website": site, "description": desc, "email": lead_email
+        })
+        st.json(res)
+        st.text_area("Draft", res.get("draft", ""), height=260)
+
+# -----------------------
+# SEND TAB
+# -----------------------
+with tab_send:
+    st.subheader("🚀 Send Email (dry-run)")
+    a, b = st.columns(2)
+    with a:
+        to = st.text_input("Recipient", "alice@example.com")
+        sender = st.text_input("Sender", DEFAULT_SENDER or "you@domain.com")
+        camp = st.text_input("Campaign", "demo-001")
+    with b:
+        subj = st.text_input("Subject", "Quick idea for {{company}}")
+        body = st.text_area("Body", "Hi — quick idea to lift conversions…", height=120)
+    st.caption("Dry-run returns a fake MessageId but still writes send metadata to Dynamo.")
+    if st.button("Send (dry-run)"):
+        res = api_post("/email/send", {
+            "recipient_email": to, "sender_email": sender,
+            "campaign_id": camp, "subject": subj, "email_body": body
+        })
+        st.json(res)
+
+# -----------------------
+# VIEW TAB
+# -----------------------
 with tab_view:
-    st.subheader("📊 Lead Viewer (Live Status)")
+    st.subheader("📊 Lead Viewer")
+    v_email = st.text_input("Lead Email", "alice@example.com", key="v_email")
+    v_campaign = st.text_input("Campaign ID", "demo-001", key="v_campaign")
 
-    lv_email = st.text_input("Lead Email", "alice@example.com", key="lv_email")
-    lv_campaign = st.text_input("Campaign ID", "demo-001", key="lv_campaign")
-
-    # Auto-refresh widget (only when tab is visible)
-    if auto_refresh:
-        st.experimental_rerun  # noqa: used only if st_autorefresh exists in your Streamlit version
-        try:
-            # Only call this if available; older versions don't have it
-            st_autorefresh = st.experimental_rerun  # placeholder
-        except Exception:
-            pass
-        # Use a safe autorefresh if present
-        try:
-            st_autorefresh = st.experimental_memo.clear  # hack guard
-        except Exception:
-            pass
-        try:
-            st.experimental_rerun  # noop just to satisfy linter
-        except Exception:
-            pass
-
-    colL, colR = st.columns([1, 1])
-
-    with colL:
-        st.markdown("**Update Status (manual)**")
-        upd_status = st.selectbox("Status", ["WARM", "NEUTRAL", "COLD", "UNSUBSCRIBE", "BOUNCED"], index=1)
-        upd_reply = st.text_area("Reply text (optional)", "Let's talk next week")
-        if st.button("Apply Update", use_container_width=True):
-            try:
-                res = api_post("/leads/status", {
-                    "email": lv_email,
-                    "campaign_id": lv_campaign,
-                    "status": upd_status,
-                    "replyText": upd_reply
-                })
-                if "error" in res:
-                    st.error(res["error"])
-                else:
-                    st.success("Status updated")
-                st.json(res)
-            except Exception as e:
-                st.error(str(e))
-
-    def render_lead_card(lead: dict):
+    def render_lead(lead):
         if not lead:
-            st.info("No lead found yet. Store a lead first on the 'Store Lead' tab.")
+            st.info("No lead found yet.")
             return
-        company = lead.get("company") or "—"
-        st.markdown(f"### {company} · {lead.get('email','')}")
-        campaigns = lead.get("campaigns", {})
-        if not campaigns:
-            st.caption("No campaigns yet.")
-        for cid, data in campaigns.items():
+        company = lead.get("company", "—")
+        st.markdown(f"### {company} · {lead.get('email', '')}")
+        fit = lead.get("fitScore", 0)
+        intent = lead.get("intentScore", 0)
+        st.markdown(f"**Fit:** {score_chip(fit)} &nbsp;&nbsp; **Intent:** {score_chip(intent)}", unsafe_allow_html=True)
+
+        prof = lead.get("profile", {})
+        sig = lead.get("signals", {})
+        st.caption(f"Website: {prof.get('website', '—')} | Shopify: {prof.get('shopify')} | Tech: {', '.join(prof.get('tech', [])) or '—'}")
+        st.caption(f"Signals → contact: {sig.get('has_contact_email')} • social: {sig.get('has_social')}")
+
+        camps = lead.get("campaigns", {})
+        for cid, data in camps.items():
             status = data.get("status", "—")
             last_reply = data.get("lastReply", "—")
             last_sent = data.get("lastSentAt")
             msg_id = data.get("messageId", "—")
-            updated_at = data.get("updatedAt")
+            score = data.get("score", 0)
+            updated = data.get("updatedAt")
             st.markdown(
                 f"""
                 <div style="border:1px solid #e5e7eb;border-radius:12px;padding:12px;margin:6px 0;">
                   <div style="display:flex;align-items:center;gap:8px;">
                     <div style="font-weight:700;">Campaign:</div> <div>{cid}</div>
                     <div>{status_chip(status)}</div>
+                    <div>Score: {score_chip(score)}</div>
                   </div>
                   <div style="font-size:13px;color:{MUTED};margin-top:6px;">
                     <div><b>Last Reply:</b> {last_reply}</div>
                     <div><b>Last Sent:</b> {dt(last_sent)} &nbsp; <b>MsgId:</b> {msg_id}</div>
-                    <div><b>Updated:</b> {dt(updated_at)}</div>
+                    <div><b>Updated:</b> {dt(updated)}</div>
                   </div>
                 </div>
                 """,
-                unsafe_allow_html=True,
+                unsafe_allow_html=True
             )
+
+    colL, colR = st.columns(2)
+    with colL:
+        st.markdown("**Update Status (manual)**")
+        s = st.selectbox("Status", ["WARM", "NEUTRAL", "COLD", "UNSUBSCRIBE", "BOUNCED"], index=1)
+        r = st.text_area("Reply text (optional)", "Let's talk next week")
+        if st.button("Apply Update"):
+            res = api_post("/leads/status", {"email": v_email, "campaign_id": v_campaign, "status": s, "replyText": r})
+            st.json(res)
 
     with colR:
         st.markdown("**Lead Snapshot (live)**")
-
-        # Preferred path: read directly from DynamoDB (no GET API needed)
-        lead_data = None
+        lead = None
         if use_direct_dynamo and BOTO3_OK:
             try:
                 dyn = boto3.resource("dynamodb", region_name=AWS_REGION)
-                table = dyn.Table("LeadsTable")
-                res = table.get_item(Key={"pk": f"LEAD#{lv_email.lower()}"})
-                item = res.get("Item") or {}
-                lead_data = item.get("data")
-                render_lead_card(lead_data)
+                tbl = dyn.Table("LeadsTable")
+                resp = tbl.get_item(Key={"pk": f"LEAD#{v_email.lower()}"})
+                item = resp.get("Item") or {}
+                lead = item.get("data")
+                render_lead(lead)
                 with st.expander("Raw item", expanded=False):
-                    st.code(safe_json(item), language="json")
-            except ClientError as e:
-                st.error(f"DynamoDB error: {e}")
+                    st.code(json.dumps(item, indent=2, ensure_ascii=False), language="json")
             except Exception as e:
                 st.error(str(e))
-
-        # Fallback: if no boto3 or disabled, ask user to refresh after updates
-        if not (use_direct_dynamo and lead_data):
-            st.info("Direct Dynamo view is disabled. Enable it in the sidebar (requires boto3 + AWS creds).")
-            st.caption("You can still see the update response JSON on the left after you change status.")
-
-# ------------- End -------------
+        else:
+            st.info("Enable direct Dynamo read in sidebar (requires boto3 + AWS creds).")
