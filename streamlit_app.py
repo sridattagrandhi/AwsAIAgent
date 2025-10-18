@@ -18,9 +18,9 @@ def _secret(k, d=""):
     except Exception:
         return d
 
-API_URL = os.getenv("API_URL") or _secret("API_URL", "")
+API_URL = os.getenv("API_URL") or _secret("API_URL", "https://jnepug6nv2.execute-api.us-east-1.amazonaws.com/Prod")
 AWS_REGION = os.getenv("AWS_REGION") or _secret("AWS_REGION", "us-east-1")
-DEFAULT_SENDER = os.getenv("SES_FROM_EMAIL") or _secret("SES_FROM_EMAIL", "")
+DEFAULT_SENDER = os.getenv("SES_FROM_EMAIL") or _secret("SES_FROM_EMAIL", "raghav.dewangan2004@gmail.com")
 
 PRIMARY = "#6C63FF"
 MUTED = "#6b7280"
@@ -89,8 +89,8 @@ st.markdown(
 )
 
 # ---- Tabs ----
-tab_search, tab_store, tab_draft, tab_send, tab_view = st.tabs(
-    ["🔍 Search", "📥 Store/Enrich Lead", "✉️ Draft Email", "🚀 Send (dry-run)", "📊 Lead Viewer"]
+tab_search, tab_store, tab_draft, tab_send, tab_view, tab_workflow = st.tabs(
+    ["🔍 Search", "📥 Store/Enrich Lead", "✉️ Draft Email", "🚀 Send Email", "📊 Lead Viewer", "🤖 Full Workflow"]
 )
 
 # -----------------------
@@ -152,7 +152,7 @@ with tab_draft:
 # SEND TAB
 # -----------------------
 with tab_send:
-    st.subheader("🚀 Send Email (dry-run)")
+    st.subheader("🚀 Send Email")
     a, b = st.columns(2)
     with a:
         to = st.text_input("Recipient", "alice@example.com")
@@ -161,8 +161,8 @@ with tab_send:
     with b:
         subj = st.text_input("Subject", "Quick idea for {{company}}")
         body = st.text_area("Body", "Hi — quick idea to lift conversions…", height=120)
-    st.caption("Dry-run returns a fake MessageId but still writes send metadata to Dynamo.")
-    if st.button("Send (dry-run)"):
+    st.success("✅ SES is configured! Emails will be sent for real.")
+    if st.button("Send Email"):
         res = api_post("/email/send", {
             "recipient_email": to, "sender_email": sender,
             "campaign_id": camp, "subject": subj, "email_body": body
@@ -244,3 +244,138 @@ with tab_view:
                 st.error(str(e))
         else:
             st.info("Enable direct Dynamo read in sidebar (requires boto3 + AWS creds).")
+
+# -----------------------
+# FULL WORKFLOW TAB
+# -----------------------
+with tab_workflow:
+    st.subheader("🤖 Complete AI Sales Workflow")
+    st.info("This demonstrates the full end-to-end sales automation process")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("### 📋 Lead Information")
+        wf_email = st.text_input("Target Email", "sridatta963@gmail.com", key="wf_email")
+        wf_company = st.text_input("Company Name", "Example Corp", key="wf_company") 
+        wf_website = st.text_input("Website", "https://example.com", key="wf_website")
+        wf_campaign = st.text_input("Campaign ID", "hackathon-demo", key="wf_campaign")
+        
+    with col2:
+        st.markdown("### ✉️ Email Configuration")
+        wf_sender = st.text_input("From Email", DEFAULT_SENDER, key="wf_sender")
+        wf_recipient = st.text_input("To Email", wf_email, key="wf_recipient")
+        
+    if st.button("🚀 Run Complete Workflow", type="primary"):
+        # Validate email addresses
+        verified_emails = ["raghav.dewangan2004@gmail.com", "sridatta963@gmail.com"]
+        if wf_recipient not in verified_emails:
+            st.error(f"⚠️ For demo purposes, emails can only be sent to verified addresses: {', '.join(verified_emails)}")
+            st.stop()
+            
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        try:
+            # Step 1: Store Lead
+            status_text.text("Step 1/5: Storing lead...")
+            progress_bar.progress(20)
+            store_res = api_post("/leads", {
+                "email": wf_email,
+                "company_name": wf_company, 
+                "campaign_id": wf_campaign,
+                "status": "SENT",
+                "website": wf_website
+            })
+            
+            if store_res.get("ok"):
+                st.success("✅ Lead stored successfully")
+            else:
+                st.error(f"❌ Failed to store lead: {store_res.get('error')}")
+                st.stop()
+            
+            # Step 2: Enrich Lead
+            status_text.text("Step 2/5: Enriching lead data...")
+            progress_bar.progress(40)
+            enrich_res = api_post("/leads/enrich", {
+                "email": wf_email,
+                "company_name": wf_company,
+                "website": wf_website
+            })
+            
+            if enrich_res.get("ok"):
+                lead_data = enrich_res.get("lead", {})
+                fit_score = lead_data.get("fitScore", 0)
+                intent_score = lead_data.get("intentScore", 0)
+                st.success(f"✅ Lead enriched - Fit: {fit_score}, Intent: {intent_score}")
+            else:
+                st.error(f"❌ Failed to enrich lead: {enrich_res.get('error')}")
+                st.stop()
+            
+            # Step 3: Generate Email
+            status_text.text("Step 3/5: Generating AI email...")
+            progress_bar.progress(60)
+            draft_res = api_post("/email/draft", {
+                "companyName": wf_company,
+                "website": wf_website,
+                "description": f"Company: {wf_company}",
+                "email": wf_email
+            })
+            
+            if draft_res.get("ok"):
+                email_draft = draft_res.get("draft", "")
+                st.success("✅ AI email generated")
+                with st.expander("📧 Generated Email"):
+                    st.text_area("Email Content", email_draft, height=200, key="generated_email")
+            else:
+                st.error(f"❌ Failed to generate email: {draft_res.get('error')}")
+                st.stop()
+            
+            # Step 4: Send Email
+            status_text.text("Step 4/5: Sending email via SES...")
+            progress_bar.progress(80)
+            send_res = api_post("/email/send", {
+                "recipient_email": wf_recipient,
+                "sender_email": wf_sender,
+                "campaign_id": wf_campaign,
+                "subject": f"Partnership Opportunity - {wf_company}",
+                "email_body": email_draft
+            })
+            
+            if send_res.get("ok"):
+                message_id = send_res.get("message_id")
+                dry_run = send_res.get("dry_run", True)
+                if dry_run:
+                    st.warning(f"⚠️ Email sent in dry-run mode: {message_id}")
+                else:
+                    st.success(f"✅ Email sent successfully! Message ID: {message_id}")
+            else:
+                st.error(f"❌ Failed to send email: {send_res.get('error')}")
+                st.stop()
+            
+            # Step 5: Complete
+            status_text.text("Step 5/5: Workflow complete!")
+            progress_bar.progress(100)
+            
+            st.balloons()
+            st.success("🎉 Complete AI Sales Workflow Executed Successfully!")
+            
+            # Show summary
+            st.markdown("### 📊 Workflow Summary")
+            summary_data = {
+                "Lead Email": wf_email,
+                "Company": wf_company,
+                "Campaign": wf_campaign,
+                "Fit Score": fit_score,
+                "Intent Score": intent_score,
+                "Email Status": "Sent" if send_res.get("ok") else "Failed",
+                "Message ID": send_res.get("message_id", "N/A")
+            }
+            
+            for key, value in summary_data.items():
+                st.write(f"**{key}:** {value}")
+                
+        except Exception as e:
+            st.error(f"❌ Workflow failed: {str(e)}")
+            progress_bar.progress(0)
+            status_text.text("Workflow failed")
