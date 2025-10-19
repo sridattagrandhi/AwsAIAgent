@@ -15,11 +15,28 @@ def extract_body(msg):
     return msg.get_body(preferencelist=('plain', 'html')).get_content().strip()
 
 def classify_reply_simple(t: str) -> str:
+    """Enhanced reply classification"""
     t = (t or "").lower()
-    unsub = ["unsubscribe", "remove me", "stop emailing", "opt out"]
-    negative = ["not interested", "no thanks", "decline", "already have"]
-    positive = ["interested", "let's talk", "schedule", "book", "demo", "call"]
-    bounce = ["undeliverable", "mail failure", "bounced"]
+    
+    # Unsubscribe indicators (highest priority)
+    unsub = ["unsubscribe", "remove me", "stop emailing", "opt out", "don't contact", "take me off"]
+    
+    # Bounce indicators
+    bounce = ["undeliverable", "mail failure", "bounced", "delivery failed"]
+    
+    # Positive indicators (interested responses)
+    positive = [
+        "interested", "let's talk", "schedule", "book", "demo", "call", 
+        "yes", "sounds good", "tell me more", "learn more", "discuss",
+        "meeting", "available", "when can we", "i'd like to"
+    ]
+    
+    # Negative indicators (not interested)
+    negative = [
+        "not interested", "no thanks", "decline", "already have", "pass",
+        "don't need", "not looking", "not right now", "no thank you"
+    ]
+    
     if any(x in t for x in bounce): return "BOUNCED"
     if any(x in t for x in unsub): return "UNSUBSCRIBE"
     if any(x in t for x in positive): return "WARM"

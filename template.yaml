@@ -152,6 +152,8 @@ Resources:
             Path: /leads/enrich
             Method: post
 
+
+
   InboundEmailsBucket:
     Type: AWS::S3::Bucket
     DeletionPolicy: Delete
