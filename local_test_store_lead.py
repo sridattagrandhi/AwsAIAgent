@@ -1,6 +1,7 @@
 # local_test_store_lead.py
-import os, json
-from lambda_functions.store_lead_data import lambda_handler
+import os, json, sys
+sys.path.append('lambda_functions')
+from store_lead_data import lambda_handler
 
 # Optional: pick a custom local file to persist leads
 os.environ["LEADS_STORE_PATH"] = "./_leads_store.json"

@@ -1,15 +1,21 @@
 # lambda_functions/update_lead_status.py
 import json, time
+from decimal import Decimal
 from leads_store_dynamo import update_status, get_lead, upsert_lead
 from replies import classify_reply_simple
 from log import jlog
 from scoring import compute_campaign_score
 
+def _json_default(obj):
+    if isinstance(obj, Decimal):
+        return float(obj)
+    raise TypeError
+
 def _resp(code=200, body=None):
     return {
         "statusCode": code,
         "headers": {"Content-Type": "application/json", "Access-Control-Allow-Origin": "*"},
-        "body": json.dumps(body if body is not None else {"ok": True})
+        "body": json.dumps(body if body is not None else {"ok": True}, default=_json_default)
     }
 
 def lambda_handler(event, context):

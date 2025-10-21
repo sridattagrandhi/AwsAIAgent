@@ -10,7 +10,7 @@ Globals:
     CodeUri: lambda_functions
     Environment:
       Variables:
-        EMAIL_DRY_RUN: "1"
+        EMAIL_DRY_RUN: "0"
         SEARCH_DRY_RUN: "1"
         BEDROCK_MODEL_ID: "amazon.nova-pro-v1:0"
         BEDROCK_REGION: "us-east-1"
@@ -106,6 +106,8 @@ Resources:
                 - ses:SendEmail
                 - ses:SendRawEmail
               Resource: "*"
+        - DynamoDBCrudPolicy:
+            TableName: LeadsTable
       Environment:
         Variables:
           SES_FROM_EMAIL: !Ref FromEmail
@@ -149,6 +151,8 @@ Resources:
             RestApiId: !Ref ApiGateway
             Path: /leads/enrich
             Method: post
+
+
 
   InboundEmailsBucket:
     Type: AWS::S3::Bucket
